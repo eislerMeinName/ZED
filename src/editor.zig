@@ -10,10 +10,11 @@ const window = @import("window.zig");
 const WindowSize = window.WindowSize;
 const fmt = std.fmt;
 const termios = os.termios;
+const Row = @import("row.zig").Row;
 
 const zed_version = "0.1";
 
-pub const EditorState = enum { writing, controlling };
+pub const EditorState = enum { starting, writing, controlling };
 
 pub const StringArrayList = std.ArrayList([]u8);
 
@@ -36,7 +37,7 @@ pub const Editor = struct {
     offset: @Vector(2, i16),
     shutting_down: bool,
     state: EditorState,
-    control: u8,
+    control: Row,
     allocator: mem.Allocator,
     orig_termios: termios,
 
@@ -54,8 +55,8 @@ pub const Editor = struct {
             .row_offset = 0,
             .col_offset = 0,
             .shutting_down = false,
-            .control = ' ',
-            .state = EditorState.writing,
+            .control = Row{ .src = "", .render = "" },
+            .state = EditorState.starting,
             .allocator = allocator,
             .orig_termios = undefined,
         };
@@ -78,21 +79,26 @@ pub const Editor = struct {
         os.tcsetattr(stdin_fd, os.TCSA.FLUSH, self.orig_termios) catch edit_panic("tcsetattr", null);
     }
 
-    fn transition(self: *Editor, input: u8) void {
+    fn transition(self: *Editor, input: u8) !void {
         switch (self.state) {
-            EditorState.writing => {
+            .writing => {
                 if (input == '\x1b') {
                     self.state = EditorState.controlling;
                 }
             },
-            EditorState.controlling => {
-                if (input == '\x1b') {
-                    self.state = EditorState.controlling;
-                } else if (input == ':') {
-                    self.control = ':';
-                } else if (input == 'x' and self.control == ':') {
-                    self.shutting_down = true;
+            .controlling => {
+                if (mem.eql(u8, self.control.render, ":x")) self.shutting_down = true;
+                if (input == '\x1b' and self.control.render.len < 2) {
+                    self.state = EditorState.writing;
+                } else {
+                    if (self.control.render.len < 2) {
+                        const app = [1]u8{input};
+                        try self.control.appendString(&app, self.allocator);
+                    }
                 }
+            },
+            .starting => {
+                self.state = .writing;
             },
         }
     }
@@ -100,15 +106,70 @@ pub const Editor = struct {
     pub fn process(self: *Editor) !void {
         const key = try self.readKey();
         switch (key) {
-            .char => |char| self.transition(char),
+            .char => |char| try self.transition(char),
             .movement => |m| self.moveCursor(m),
             .delete => {},
         }
     }
 
     fn drawRows(self: *Editor, writer: anytype) !void {
+        switch (self.state) {
+            .starting => try self.drawStarting(writer),
+            .writing => try self.drawWriting(writer),
+            .controlling => try self.drawControl(writer),
+        }
+        try self.drawBottom(writer);
+    }
+
+    fn calcBottomSpace(self: *Editor) usize {
+        var i: u16 = 1;
+        var number1 = self.cursor[0];
+        while (number1 >= 10) : (number1 = @divFloor(number1, 10)) {
+            i += 1;
+        }
+
+        var j: u16 = 1;
+        var number2 = self.cursor[1];
+        while (number2 >= 10) : (number2 = @divFloor(number2, 10)) {
+            j += 1;
+        }
+
+        return 2 + i + j;
+    }
+
+    fn drawBottom(self: *Editor, writer: anytype) !void {
+        var mode = try fmt.allocPrint(self.allocator, "ZED -- mode {s}", .{@tagName(self.state)});
+        defer self.allocator.free(mode);
+        const space = self.calcBottomSpace();
+        var padding = self.n_cols - mode.len - space - self.control.render.len;
+        try writer.writeAll(mode);
+        while (padding > self.n_cols / 2) : (padding -= 1) try writer.writeAll(" ");
+        try writer.writeAll(self.control.render);
+        while (padding > 0) : (padding -= 1) try writer.writeAll(" ");
+        const curs = try std.fmt.allocPrint(self.allocator, "{d}, {d}", .{ @intCast(i16, self.cursor[1]), @intCast(i16, self.cursor[0]) });
+        try writer.writeAll(curs);
+    }
+
+    fn drawWriting(self: *Editor, writer: anytype) !void {
         var y: usize = 0;
-        while (y < self.n_rows) : (y += 1) {
+        while (y < self.n_rows - 1) : (y += 1) {
+            const row = y + self.row_offset;
+            if (row >= self.rows.items.len) {
+                try writer.writeAll("*");
+            } else {
+                const text = self.rows.items[row];
+                var len = text.len;
+                if (len > self.n_cols) len = self.n_cols;
+                try writer.writeAll(text[0..len]);
+            }
+            try writer.writeAll("\x1b[K");
+            if (y < self.n_rows - 1) try writer.writeAll("\r\n");
+        }
+    }
+
+    fn drawControl(self: *Editor, writer: anytype) !void {
+        var y: usize = 0;
+        while (y < self.n_rows - 1) : (y += 1) {
             const file_row = y + self.row_offset;
             if (file_row >= self.rows.items.len) {
                 if (self.rows.items.len == 0 and y == self.n_rows / 3) {
@@ -130,6 +191,23 @@ pub const Editor = struct {
                 var len = row.len;
                 if (len > self.n_cols) len = self.n_cols;
                 try writer.writeAll(row[0..len]);
+            }
+            try writer.writeAll("\x1b[K");
+            if (y < self.n_rows - 1) try writer.writeAll("\r\n");
+        }
+    }
+
+    fn drawStarting(self: *Editor, writer: anytype) !void {
+        var y: usize = 0;
+        while (y < self.n_rows - 1) : (y += 1) {
+            const row = y + self.row_offset;
+            if (row >= self.rows.items.len and self.rows.items.len == 0 and y == self.n_rows / 3) {
+                var welcome = try fmt.allocPrint(self.allocator, "ZED -- version {s}", .{zed_version});
+                defer self.allocator.free(welcome);
+                if (welcome.len > self.n_cols) welcome = welcome[0..self.n_cols];
+                var padding = (self.n_cols - welcome.len) / 2;
+                while (padding > 0) : (padding -= 1) try writer.writeAll(" ");
+                try writer.writeAll(welcome);
             }
             try writer.writeAll("\x1b[K");
             if (y < self.n_rows - 1) try writer.writeAll("\r\n");
@@ -160,24 +238,16 @@ pub const Editor = struct {
                 if (self.cursor[1] > 0) self.cursor[1] -= 1;
             },
             .arr_down => {
-                if (self.cursor[1] < self.rows.items.len - 1) self.cursor[1] += 1;
+                if (self.cursor[1] < self.rows.items.len) self.cursor[1] += 1;
             },
             else => unreachable,
         }
     }
 
-    fn readKey(self: *Editor) !Key {
+    fn readKey2(self: *Editor) !Key {
         const byte = try readByte();
-        self.transition(byte);
         switch (byte) {
-            '\x1b' => {
-                // Schwachsinn
-                const sec_byte = readByte() catch return Key{ .char = '\x1b' };
-                // is expected to be \n
-                if (sec_byte == 10) {
-                    return Key{ .char = '\x1b' };
-                }
-            },
+            '\x1b' => return Key{ .char = '\x1b' },
             'a' => if (self.state == EditorState.writing) return Key{ .movement = .arr_left },
             'd' => if (self.state == EditorState.writing) return Key{ .movement = .arr_right },
             's' => if (self.state == EditorState.writing) return Key{ .movement = .arr_down },
@@ -187,9 +257,81 @@ pub const Editor = struct {
         return Key{ .char = byte };
     }
 
+    fn readKey(self: *Editor) !Key {
+        if (self.state == .starting) {
+            const cc = try readByte();
+            return Key{ .char = cc };
+        }
+        const c = try readByte();
+        switch (c) {
+            '\x1b' => {
+                const c1 = readByte() catch return Key{ .char = '\x1b' };
+                if (c1 == '[') {
+                    const c2 = readByte() catch return Key{ .char = '\x1b' };
+                    switch (c2) {
+                        'A' => return Key{ .movement = .arr_up },
+                        'B' => return Key{ .movement = .arr_down },
+                        'C' => return Key{ .movement = .arr_right },
+                        'D' => return Key{ .movement = .arr_left },
+                        'F' => return Key{ .movement = .end_key },
+                        'H' => return Key{ .movement = .home_key },
+                        '1' => {
+                            const c3 = readByte() catch return Key{ .char = '\x1b' };
+                            if (c3 == '~') return Key{ .movement = .home_key };
+                        },
+                        '3' => {
+                            const c3 = readByte() catch return Key{ .char = '\x1b' };
+                            if (c3 == '~') return Key.delete;
+                        },
+                        '4' => {
+                            const c3 = readByte() catch return Key{ .char = '\x1b' };
+                            if (c3 == '~') return Key{ .movement = .end_key };
+                        },
+                        '5' => {
+                            const c3 = readByte() catch return Key{ .char = '\x1b' };
+                            if (c3 == '~') return Key{ .movement = .page_up };
+                        },
+                        '6' => {
+                            const c3 = readByte() catch return Key{ .char = '\x1b' };
+                            if (c3 == '~') return Key{ .movement = .page_down };
+                        },
+                        else => {
+                            return Key{ .char = '\x1b' };
+                        },
+                    }
+                } else if (c1 == 'O') {
+                    const c2 = readByte() catch return Key{ .char = '\x1b' };
+                    switch (c2) {
+                        'F' => return Key{ .movement = .end_key },
+                        'H' => return Key{ .movement = .home_key },
+                        else => {},
+                    }
+                }
+            },
+            ctrlKey('n') => return Key{
+                .movement = .arr_down,
+            },
+            ctrlKey('p') => return Key{
+                .movement = .arr_up,
+            },
+            ctrlKey('f') => return Key{
+                .movement = .arr_right,
+            },
+            ctrlKey('b') => return Key{
+                .movement = .arr_left,
+            },
+            else => {},
+        }
+        return Key{ .char = c };
+    }
+
     fn readByte() !u8 {
         var buffer: [1]u8 = undefined;
         _ = try stdin.read(buffer[0..]);
         return buffer[0];
+    }
+
+    inline fn ctrlKey(comptime ch: u8) u8 {
+        return ch & 0x1f;
     }
 };

@@ -31,4 +31,8 @@ pub fn main() anyerror!void {
         try edit.refreshScreen();
         try edit.process();
     }
+
+    //editor.free();
+    try stdout.writeAll("\x1b[2J");
+    try stdout.writeAll("\x1b[H");
 }
