@@ -15,15 +15,43 @@ pub const Row = struct {
         try self.updateRow(alloc);
     }
 
-    fn updateRow(self: *Row, alloc: mem.Allocator) !void {
+    pub fn updateRow(self: *Row, alloc: mem.Allocator) !void {
         alloc.free(self.render);
         self.render = try alloc.dupe(u8, self.src);
     }
 
-    fn delCharAt(self: *Row, at: usize, alloc: mem.Allocator) !void {
+    pub fn delCharAt(self: *Row, at: usize, alloc: mem.Allocator) !void {
         if (at > self.src.len) return;
         mem.copy(u8, self.src[at..self.src.len], self.src[at + 1 .. self.src.len]);
         self.src.len -= 1;
+        try self.updateRow(alloc);
+    }
+
+    pub fn insertCharAt(self: *Row, at: usize, alloc: mem.Allocator, char: u8) !void {
+        var old_src = try alloc.dupe(u8, self.src);
+        self.src = try alloc.realloc(self.src, old_src.len + 1);
+
+        if (at > self.src.len) {
+            //            @memset(self.src[at..at + 1], char);
+        } else {
+            var j: usize = 0;
+            var i: usize = 0;
+            while (i < self.src.len) : (i += 1) {
+                if (i == at) {
+                    self.src[i] = char;
+                } else {
+                    self.src[i] = old_src[j];
+                    j += 1;
+                }
+            }
+            //for (0..self.src.len) |i| {
+            //    if (i == at) {self.src[i] = char;}
+            //    else {
+            //        self.src[i] = old_src[j];
+            //        j += 1;
+            //    }
+            //}
+        }
         try self.updateRow(alloc);
     }
 };

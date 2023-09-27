@@ -11,6 +11,7 @@ const WindowSize = window.WindowSize;
 const fmt = std.fmt;
 const termios = os.termios;
 const Row = @import("row.zig").Row;
+const ArrayList = std.ArrayList;
 
 const zed_version = "0.1";
 
@@ -30,13 +31,13 @@ pub fn edit_panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace)
 pub const Editor = struct {
     n_rows: u16,
     n_cols: u16,
-    row_offset: usize,
-    col_offset: usize,
-    rows: StringArrayList,
+    row_offset: usize = 0,
+    col_offset: usize = 0,
+    rows: ArrayList(Row),
     cursor: @Vector(2, i16),
     offset: @Vector(2, i16),
     shutting_down: bool,
-    state: EditorState,
+    state: EditorState = .starting,
     control: Row,
     allocator: mem.Allocator,
     orig_termios: termios,
@@ -51,12 +52,9 @@ pub const Editor = struct {
             .n_cols = ws.cols,
             .cursor = @Vector(2, i16){ 0, 0 },
             .offset = @Vector(2, i16){ 0, 0 },
-            .rows = StringArrayList.init(allocator),
-            .row_offset = 0,
-            .col_offset = 0,
+            .rows = ArrayList(Row).init(allocator),
             .shutting_down = false,
             .control = Row{ .src = "", .render = "" },
-            .state = EditorState.starting,
             .allocator = allocator,
             .orig_termios = undefined,
         };
@@ -103,12 +101,161 @@ pub const Editor = struct {
         }
     }
 
+    fn delete(self: *Editor) !void {
+        switch (self.state) {
+            .starting => self.state = .writing,
+            .controlling => try self.control.delCharAt(self.control.render.len, self.allocator),
+            .writing => {},
+        }
+    }
+
+    fn insertNewLine(self: *Editor) !void {
+        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+
+        if (f_row >= self.rows.items.len) {
+            if (f_row == self.rows.items.len) {
+                try self.insertRow(f_row, "");
+                self.fixCursor();
+            }
+            return;
+        }
+
+        var row = &self.rows.items[f_row];
+
+        if (f_col >= row.src.len) f_col = row.src.len;
+
+        if (f_col == 0) {
+            try self.insertRow(f_row, "");
+        } else {
+            try self.insertRow(f_row + 1, row.src[f_col..row.src.len]);
+
+            var j: usize = 0;
+
+            for (row.src[0..f_col]) |c| {
+                row.src[j] = c;
+                j += 1;
+            }
+
+            _ = self.allocator.resize(row.src, f_col);
+
+            row.*.src.len = f_col;
+
+            try row.updateRow(self.allocator);
+        }
+
+        self.fixCursor();
+    }
+
+    fn fixCursor(self: *Editor) void {
+        if (self.cursor[1] == self.n_rows - 1) self.row_offset += 1 else self.cursor[1] += 1;
+
+        self.cursor[0] = 0;
+        self.col_offset = 0;
+    }
+
+    fn insertRow(self: *Editor, at: usize, buffer: []const u8) !void {
+        if (at < 0 or at > self.rows.items.len) return;
+
+        var row = Row{ .src = try self.allocator.dupe(u8, buffer), .render = try self.allocator.alloc(u8, buffer.len) };
+
+        try row.updateRow(self.allocator);
+        try self.rows.insert(at, row);
+    }
+
+    fn delRow(self: *Editor, at: usize) !void {
+        if (at >= self.rows.items.len) return;
+
+        _ = self.rows.orderedRemove(at);
+    }
+
+    fn delChar(self: *Editor) !void {
+        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+
+        if (self.rows.items.len < f_row or (f_col == 0 and f_row == 0)) return;
+
+        const row = &self.rows.items[f_row];
+
+        if (f_col == 0) {
+            f_col = self.rows.items[f_row - 1].src.len;
+            try row.appendString(row.src, self.allocator);
+            try self.delRow(f_row);
+
+            if (self.cursor[1] == 0) self.row_offset -= 1 else self.cursor[1] -= 1;
+            self.cursor[0] = @intCast(i16, f_col);
+
+            if (self.cursor[0] >= self.n_cols) {
+                var shift: usize = self.n_cols - @intCast(usize, self.cursor[0]) + 1;
+                self.cursor[0] -= @intCast(i16, shift);
+                self.col_offset += shift;
+            }
+        } else {
+            try row.delCharAt(f_col - 1, self.allocator);
+            if (self.cursor[0] == 0 and self.col_offset > 0) {
+                self.col_offset -= 1;
+            } else {
+                self.cursor[0] -= 1;
+            }
+
+            try row.updateRow(self.allocator);
+        }
+    }
+
+    fn insertChar(self: *Editor, char: u8) !void {
+        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+
+        var i = self.rows.items.len;
+
+        if (f_row >= self.rows.items.len) {
+            //for (len..f_row + 1) |_| try self.insertRow(self.rows.items.len, "");
+            while (i <= f_row) : (i += 1) {
+                try self.insertRow(self.rows.items.len, "");
+            }
+        }
+
+        const row = &self.rows.items[f_row];
+
+        try row.insertCharAt(f_col, self.allocator, char);
+
+        if (self.cursor[0] == self.n_cols - 1) self.col_offset += 1 else self.cursor[0] += 1;
+    }
+
+    fn processWriting(self: *Editor, input: u8) !void {
+        switch (@intToEnum(Key, input)) {
+            .enter => return try self.insertNewLine(),
+            .arr_left, .arr_up, .arr_down, .arr_right => self.moveCursor(input),
+            .esc => self.state = .controlling,
+            .home => self.cursor[0] = 0,
+            .del => try self.delChar(),
+            else => try self.insertChar(input),
+        }
+    }
+
+    fn processControlling(self: *Editor, input: u8) !void {
+        switch (@intToEnum(Key, input)) {
+            .esc => self.state = .writing,
+            .del => {
+                try self.control.delCharAt(self.control.src.len - 1, self.allocator);
+            },
+            .enter => {
+                if (mem.eql(u8, self.control.render, ":x")) self.shutting_down = true;
+            },
+            .arr_left, .arr_up, .arr_down, .arr_right => self.moveCursor(input),
+            else => {
+                const app = [1]u8{input};
+                try self.control.appendString(&app, self.allocator);
+            },
+        }
+    }
+
     pub fn process(self: *Editor) !void {
         const key = try self.readKey();
-        switch (key) {
-            .char => |char| try self.transition(char),
-            .movement => |m| self.moveCursor(m),
-            .delete => {},
+        switch (self.state) {
+            .starting => self.state = .writing,
+            .writing => try self.processWriting(key),
+            .controlling => try self.processControlling(key),
         }
     }
 
@@ -157,10 +304,10 @@ pub const Editor = struct {
             if (row >= self.rows.items.len) {
                 try writer.writeAll("*");
             } else {
-                const text = self.rows.items[row];
-                var len = text.len;
+                var text = &self.rows.items[row];
+                var len = text.render.len;
                 if (len > self.n_cols) len = self.n_cols;
-                try writer.writeAll(text[0..len]);
+                try writer.writeAll(text.render[0..len]);
             }
             try writer.writeAll("\x1b[K");
             if (y < self.n_rows - 1) try writer.writeAll("\r\n");
@@ -187,10 +334,10 @@ pub const Editor = struct {
                     try writer.writeAll("~");
                 }
             } else {
-                const row = self.rows.items[file_row];
-                var len = row.len;
+                var row = &self.rows.items[file_row];
+                var len = row.render.len;
                 if (len > self.n_cols) len = self.n_cols;
-                try writer.writeAll(row[0..len]);
+                try writer.writeAll(row.render[0..len]);
             }
             try writer.writeAll("\x1b[K");
             if (y < self.n_rows - 1) try writer.writeAll("\r\n");
@@ -226,8 +373,8 @@ pub const Editor = struct {
         try stdout.writeAll(buf.items);
     }
 
-    fn moveCursor(self: *Editor, movement: Movement) void {
-        switch (movement) {
+    fn moveCursor(self: *Editor, movement: u8) void {
+        switch (@intToEnum(Key, movement)) {
             .arr_left => {
                 if (self.cursor[0] > 0) self.cursor[0] -= 1;
             },
@@ -244,25 +391,67 @@ pub const Editor = struct {
         }
     }
 
-    fn readKey2(self: *Editor) !Key {
+    fn readKey(self: *Editor) !u8 {
+        if (self.state == .starting) {
+            _ = try readByte();
+            return @enumToInt(Key.arr_up);
+        }
         const byte = try readByte();
         switch (byte) {
-            '\x1b' => return Key{ .char = '\x1b' },
-            'a' => if (self.state == EditorState.writing) return Key{ .movement = .arr_left },
-            'd' => if (self.state == EditorState.writing) return Key{ .movement = .arr_right },
-            's' => if (self.state == EditorState.writing) return Key{ .movement = .arr_down },
-            'w' => if (self.state == EditorState.writing) return Key{ .movement = .arr_up },
-            else => {},
+            @enumToInt(Key.esc) => {
+                const byte2 = readByte() catch return @enumToInt(Key.esc);
+
+                if (byte2 == '[') {
+                    const byte3 = readByte() catch return @enumToInt(Key.esc);
+                    switch (byte3) {
+                        'A' => return @enumToInt(Key.arr_up),
+                        'B' => return @enumToInt(Key.arr_down),
+                        'C' => return @enumToInt(Key.arr_right),
+                        'D' => return @enumToInt(Key.arr_left),
+                        'H' => return @enumToInt(Key.home),
+                        'F' => return @enumToInt(Key.end),
+                        '0'...'9' => {
+                            const byte4 = readByte() catch return @enumToInt(Key.esc);
+                            if (byte4 == '~') {
+                                switch (byte3) {
+                                    '1' => return @enumToInt(Key.home),
+                                    '2' => return @enumToInt(Key.del),
+                                    '3' => return @enumToInt(Key.end),
+                                    //'4' => return @enumToInt(Key.page_up),
+                                    //'5' => return @enumToInt(Key.page_down),
+                                    //'6' => return @enumToInt(Key.page_down),
+                                    '7' => return @enumToInt(Key.home),
+                                    '8' => return @enumToInt(Key.end),
+                                    else => {},
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                } else if (byte2 == 'O') {
+                    const byte5 = readByte() catch return @enumToInt(Key.esc);
+                    switch (byte5) {
+                        'H' => return @enumToInt(Key.home),
+                        'F' => return @enumToInt(Key.end),
+                        else => {},
+                    }
+                }
+
+                return @enumToInt(Key.esc);
+            },
+            else => return byte,
         }
-        return Key{ .char = byte };
+
+        return byte;
     }
 
-    fn readKey(self: *Editor) !Key {
+    fn readKey2(self: *Editor) !Key {
         if (self.state == .starting) {
             const cc = try readByte();
             return Key{ .char = cc };
         }
         const c = try readByte();
+        //return @intToEnum(Key,c);
         switch (c) {
             '\x1b' => {
                 const c1 = readByte() catch return Key{ .char = '\x1b' };
