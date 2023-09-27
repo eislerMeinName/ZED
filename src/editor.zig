@@ -77,38 +77,6 @@ pub const Editor = struct {
         os.tcsetattr(stdin_fd, os.TCSA.FLUSH, self.orig_termios) catch edit_panic("tcsetattr", null);
     }
 
-    fn transition(self: *Editor, input: u8) !void {
-        switch (self.state) {
-            .writing => {
-                if (input == '\x1b') {
-                    self.state = EditorState.controlling;
-                }
-            },
-            .controlling => {
-                if (mem.eql(u8, self.control.render, ":x")) self.shutting_down = true;
-                if (input == '\x1b' and self.control.render.len < 2) {
-                    self.state = EditorState.writing;
-                } else {
-                    if (self.control.render.len < 2) {
-                        const app = [1]u8{input};
-                        try self.control.appendString(&app, self.allocator);
-                    }
-                }
-            },
-            .starting => {
-                self.state = .writing;
-            },
-        }
-    }
-
-    fn delete(self: *Editor) !void {
-        switch (self.state) {
-            .starting => self.state = .writing,
-            .controlling => try self.control.delCharAt(self.control.render.len, self.allocator),
-            .writing => {},
-        }
-    }
-
     fn insertNewLine(self: *Editor) !void {
         var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
         var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
@@ -443,75 +411,6 @@ pub const Editor = struct {
         }
 
         return byte;
-    }
-
-    fn readKey2(self: *Editor) !Key {
-        if (self.state == .starting) {
-            const cc = try readByte();
-            return Key{ .char = cc };
-        }
-        const c = try readByte();
-        //return @intToEnum(Key,c);
-        switch (c) {
-            '\x1b' => {
-                const c1 = readByte() catch return Key{ .char = '\x1b' };
-                if (c1 == '[') {
-                    const c2 = readByte() catch return Key{ .char = '\x1b' };
-                    switch (c2) {
-                        'A' => return Key{ .movement = .arr_up },
-                        'B' => return Key{ .movement = .arr_down },
-                        'C' => return Key{ .movement = .arr_right },
-                        'D' => return Key{ .movement = .arr_left },
-                        'F' => return Key{ .movement = .end_key },
-                        'H' => return Key{ .movement = .home_key },
-                        '1' => {
-                            const c3 = readByte() catch return Key{ .char = '\x1b' };
-                            if (c3 == '~') return Key{ .movement = .home_key };
-                        },
-                        '3' => {
-                            const c3 = readByte() catch return Key{ .char = '\x1b' };
-                            if (c3 == '~') return Key.delete;
-                        },
-                        '4' => {
-                            const c3 = readByte() catch return Key{ .char = '\x1b' };
-                            if (c3 == '~') return Key{ .movement = .end_key };
-                        },
-                        '5' => {
-                            const c3 = readByte() catch return Key{ .char = '\x1b' };
-                            if (c3 == '~') return Key{ .movement = .page_up };
-                        },
-                        '6' => {
-                            const c3 = readByte() catch return Key{ .char = '\x1b' };
-                            if (c3 == '~') return Key{ .movement = .page_down };
-                        },
-                        else => {
-                            return Key{ .char = '\x1b' };
-                        },
-                    }
-                } else if (c1 == 'O') {
-                    const c2 = readByte() catch return Key{ .char = '\x1b' };
-                    switch (c2) {
-                        'F' => return Key{ .movement = .end_key },
-                        'H' => return Key{ .movement = .home_key },
-                        else => {},
-                    }
-                }
-            },
-            ctrlKey('n') => return Key{
-                .movement = .arr_down,
-            },
-            ctrlKey('p') => return Key{
-                .movement = .arr_up,
-            },
-            ctrlKey('f') => return Key{
-                .movement = .arr_right,
-            },
-            ctrlKey('b') => return Key{
-                .movement = .arr_left,
-            },
-            else => {},
-        }
-        return Key{ .char = c };
     }
 
     fn readByte() !u8 {

@@ -44,13 +44,6 @@ pub const Row = struct {
                     j += 1;
                 }
             }
-            //for (0..self.src.len) |i| {
-            //    if (i == at) {self.src[i] = char;}
-            //    else {
-            //        self.src[i] = old_src[j];
-            //        j += 1;
-            //    }
-            //}
         }
         try self.updateRow(alloc);
     }
@@ -59,7 +52,6 @@ pub const Row = struct {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
-    //defer _ = gpa.deinit();
     var ro = Row{ .src = "", .render = "" };
     try ro.appendString(":x", allocator);
     std.debug.print("{s}\n", .{ro.render});
