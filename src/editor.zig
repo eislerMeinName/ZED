@@ -59,12 +59,13 @@ pub const Editor = struct {
             .control = Row{ .src = "", .render = "" },
             .allocator = allocator,
             .orig_termios = undefined,
-            .file_path = undefined,
+            .file_path = "",
             .state = .controlling,
         };
 
         if (mem.eql(u8, path, "")) {
             edit.state = .starting;
+            return edit;
         }
 
         try edit.open(path);
@@ -88,6 +89,13 @@ pub const Editor = struct {
         os.tcsetattr(stdin_fd, os.TCSA.FLUSH, self.orig_termios) catch edit_panic("tcsetattr", null);
     }
 
+    pub fn updateWindowSize(self: *Editor) !void {
+        const ws = try window.getWindowSize();
+        if (self.n_rows == ws.rows and self.n_cols == ws.cols) return;
+        self.n_rows = ws.rows;
+        self.n_cols = ws.cols;
+    }
+
     fn open(self: *Editor, path: []const u8) !void {
         self.file_path = path;
 
@@ -107,6 +115,40 @@ pub const Editor = struct {
             try self.insertRow(linenumber, line);
             linenumber += 1;
         }
+    }
+
+    fn save(self: *Editor) !void {
+        const buffer = try self.rowsToString();
+        defer self.allocator.free(buffer);
+
+        const file = try fs.cwd().createFile(
+            self.file_path,
+            .{
+                .read = true,
+            },
+        );
+        defer file.close();
+
+        try file.writeAll(buffer);
+    }
+
+    fn rowsToString(self: *Editor) ![]u8 {
+        var length: usize = 0;
+        for (self.rows.items) |row| {
+            length += row.src.len + 1;
+        }
+
+        var buffer = try self.allocator.alloc(u8, length);
+
+        length = 0;
+        var prev_len: usize = 0;
+        for (self.rows.items) |row| {
+            mem.copy(u8, buffer[prev_len .. prev_len + row.src.len], row.src);
+            mem.copy(u8, buffer[prev_len + row.src.len .. prev_len + row.src.len + 1], "\n");
+            prev_len += row.src.len + 1;
+        }
+
+        return buffer;
     }
 
     fn insertNewLine(self: *Editor) !void {
@@ -214,7 +256,6 @@ pub const Editor = struct {
         var i = self.rows.items.len;
 
         if (f_row >= self.rows.items.len) {
-            //for (len..f_row + 1) |_| try self.insertRow(self.rows.items.len, "");
             while (i <= f_row) : (i += 1) {
                 try self.insertRow(self.rows.items.len, "");
             }
@@ -240,7 +281,7 @@ pub const Editor = struct {
 
     fn processControlling(self: *Editor, input: u8) !void {
         switch (@intToEnum(Key, input)) {
-            .esc, @intToEnum(Key, 'i') => {
+            .esc => {
                 self.state = .writing;
                 try self.emptyControl();
             },
@@ -259,6 +300,19 @@ pub const Editor = struct {
         }
     }
 
+    fn writeQuit(self: *Editor) !void {
+        if (self.file_path.len == 0) return;
+        try self.save();
+        self.shutting_down = true;
+    }
+
+    fn setFilePath(self: *Editor) !void {
+        const len = self.control.render.len - 3;
+        var buffer = try self.allocator.alloc(u8, len);
+        mem.copy(u8, buffer[0..len], self.control.render[3..self.control.render.len]);
+        self.file_path = buffer;
+    }
+
     fn QuickdeleteLine(self: *Editor) !void {
         if (self.rows.items.len == 0) return;
         var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
@@ -270,8 +324,6 @@ pub const Editor = struct {
     }
 
     fn checkQuickCommands(self: *Editor) !void {
-        //var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
-        // var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
         if (mem.eql(u8, self.control.render, "dd")) {
             try self.QuickdeleteLine();
         } else {
@@ -282,6 +334,10 @@ pub const Editor = struct {
 
     fn checkCommands(self: *Editor) !void {
         if (mem.eql(u8, self.control.render, ":x")) {
+            try self.writeQuit();
+        } else if (mem.eql(u8, self.control.render[0..2], ":f")) {
+            try self.setFilePath();
+        } else if (mem.eql(u8, self.control.render, ":q")) {
             self.shutting_down = true;
         } else {
             return;
@@ -387,7 +443,38 @@ pub const Editor = struct {
         }
     }
 
+    fn drawCentral(self: *Editor, writer: anytype, str: []const u8) !void {
+        var lPadding = @divFloor(self.n_cols - str.len, 2);
+        while (lPadding > 0) : (lPadding -= 1) try writer.writeAll(" ");
+        try writer.writeAll(str);
+    }
+
     fn drawStarting(self: *Editor, writer: anytype) !void {
+        var topPadding = @divFloor(self.n_rows - 1 - 6, 2);
+        var floorPadding = self.n_rows - 1 - 5 - topPadding;
+        while (topPadding > 0) : (topPadding -= 1) try writer.writeAll("\x1b[K\r\n");
+
+        var version = try fmt.allocPrint(self.allocator, "ZED -- version {s}\r\n", .{zed_version});
+        defer self.allocator.free(version);
+        try self.drawCentral(writer, version);
+
+        var by = "by Johannes M. Tölle\r\n";
+        try self.drawCentral(writer, by);
+
+        try writer.writeAll("\x1b[K\r\n");
+
+        var note = "Note: no file specified\r\n";
+        try self.drawCentral(writer, note);
+
+        try writer.writeAll("\x1b[K\r\n");
+
+        var press = "Press any Key\r\n";
+        try self.drawCentral(writer, press);
+
+        while (floorPadding > 0) : (floorPadding -= 1) try writer.writeAll("\x1b[K\r\n");
+    }
+
+    fn drawStarting2(self: *Editor, writer: anytype) !void {
         var y: usize = 0;
         while (y < self.n_rows - 1) : (y += 1) {
             const row = y + self.row_offset;

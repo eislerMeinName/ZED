@@ -20,10 +20,12 @@ pub fn main() anyerror!void {
     var args = std.process.args();
     _ = args.next();
 
-    var path = args.next() orelse {
-        std.debug.print("Usage: ZED [filename]\n\n", .{});
-        return error.NoFileName;
-    };
+    //var path = args.next() orelse {
+    //    std.debug.print("Usage: ZED [filename]\n\n", .{});
+    //    return error.NoFileName;
+    //};
+
+    var path = args.next() orelse "";
 
     var allocator = gpa.allocator();
     var edit = try Editor.init(allocator, path);
@@ -31,6 +33,7 @@ pub fn main() anyerror!void {
     defer edit.disableRawMode();
 
     while (!edit.shutting_down) {
+        try edit.updateWindowSize();
         try edit.refreshScreen();
         try edit.process();
     }
