@@ -3,6 +3,7 @@ const Movement = @import("key.zig").Movement;
 const std = @import("std");
 const io = @import("std").io;
 const os = std.os;
+const fs = std.fs;
 const stdin = io.getStdIn().reader();
 const mem = @import("std").mem;
 const heap = @import("std").heap;
@@ -37,14 +38,15 @@ pub const Editor = struct {
     cursor: @Vector(2, i16),
     offset: @Vector(2, i16),
     shutting_down: bool,
-    state: EditorState = .starting,
+    state: EditorState,
     control: Row,
     allocator: mem.Allocator,
     orig_termios: termios,
+    file_path: []const u8,
 
     const Self = @This();
 
-    pub fn init(allocator: mem.Allocator) !*Editor {
+    pub fn init(allocator: mem.Allocator, path: []const u8) !*Editor {
         const ws = try window.getWindowSize();
         var edit = try allocator.create(Self);
         edit.* = .{
@@ -57,7 +59,16 @@ pub const Editor = struct {
             .control = Row{ .src = "", .render = "" },
             .allocator = allocator,
             .orig_termios = undefined,
+            .file_path = undefined,
+            .state = .controlling,
         };
+
+        if (mem.eql(u8, path, "")) {
+            edit.state = .starting;
+        }
+
+        try edit.open(path);
+
         return edit;
     }
 
@@ -75,6 +86,27 @@ pub const Editor = struct {
 
     pub fn disableRawMode(self: *Self) void {
         os.tcsetattr(stdin_fd, os.TCSA.FLUSH, self.orig_termios) catch edit_panic("tcsetattr", null);
+    }
+
+    fn open(self: *Editor, path: []const u8) !void {
+        self.file_path = path;
+
+        const file = try fs.cwd().createFile(path, .{
+            .read = true,
+            .truncate = false,
+        });
+
+        defer file.close();
+
+        //read entire file
+        var bytes = try file.reader().readAllAlloc(self.allocator, std.math.maxInt(u32));
+        var lines = std.mem.split(u8, bytes, "\n");
+
+        var linenumber: usize = 0;
+        while (lines.next()) |line| {
+            try self.insertRow(linenumber, line);
+            linenumber += 1;
+        }
     }
 
     fn insertNewLine(self: *Editor) !void {
@@ -120,6 +152,11 @@ pub const Editor = struct {
 
         self.cursor[0] = 0;
         self.col_offset = 0;
+    }
+
+    fn fixCursorUmlaut(self: *Editor) void {
+        std.debug.print("Hallo {d}", .{self.n_cols});
+        self.cursor = @Vector(2, i16){ 0, 0 };
     }
 
     fn insertRow(self: *Editor, at: usize, buffer: []const u8) !void {
@@ -203,25 +240,65 @@ pub const Editor = struct {
 
     fn processControlling(self: *Editor, input: u8) !void {
         switch (@intToEnum(Key, input)) {
-            .esc => self.state = .writing,
+            .esc, @intToEnum(Key, 'i') => {
+                self.state = .writing;
+                try self.emptyControl();
+            },
             .del => {
-                try self.control.delCharAt(self.control.src.len - 1, self.allocator);
+                if (self.control.src.len > 0) try self.control.delCharAt(self.control.src.len - 1, self.allocator);
             },
             .enter => {
-                if (mem.eql(u8, self.control.render, ":x")) self.shutting_down = true;
+                try self.checkCommands();
             },
             .arr_left, .arr_up, .arr_down, .arr_right => self.moveCursor(input),
             else => {
                 const app = [1]u8{input};
                 try self.control.appendString(&app, self.allocator);
+                try self.checkQuickCommands();
             },
+        }
+    }
+
+    fn QuickdeleteLine(self: *Editor) !void {
+        if (self.rows.items.len == 0) return;
+        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        try self.delRow(f_row);
+        if (f_row >= self.rows.items.len and f_row > 0) {
+            self.cursor[1] -= 1;
+        }
+        self.cursor[0] = 0;
+    }
+
+    fn checkQuickCommands(self: *Editor) !void {
+        //var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        // var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+        if (mem.eql(u8, self.control.render, "dd")) {
+            try self.QuickdeleteLine();
+        } else {
+            return;
+        }
+        try self.emptyControl();
+    }
+
+    fn checkCommands(self: *Editor) !void {
+        if (mem.eql(u8, self.control.render, ":x")) {
+            self.shutting_down = true;
+        } else {
+            return;
+        }
+        try self.emptyControl();
+    }
+
+    fn emptyControl(self: *Editor) !void {
+        while (self.control.src.len > 0) {
+            try self.control.delCharAt(self.control.src.len - 1, self.allocator);
         }
     }
 
     pub fn process(self: *Editor) !void {
         const key = try self.readKey();
         switch (self.state) {
-            .starting => self.state = .writing,
+            .starting => self.state = .controlling,
             .writing => try self.processWriting(key),
             .controlling => try self.processControlling(key),
         }
@@ -253,13 +330,11 @@ pub const Editor = struct {
     }
 
     fn drawBottom(self: *Editor, writer: anytype) !void {
-        var mode = try fmt.allocPrint(self.allocator, "ZED -- mode {s}", .{@tagName(self.state)});
+        var mode = try fmt.allocPrint(self.allocator, "ZED -- mode {s} | {s} | {s}", .{ @tagName(self.state), self.file_path, self.control.render });
         defer self.allocator.free(mode);
-        const space = self.calcBottomSpace();
-        var padding = self.n_cols - mode.len - space - self.control.render.len;
         try writer.writeAll(mode);
-        while (padding > self.n_cols / 2) : (padding -= 1) try writer.writeAll(" ");
-        try writer.writeAll(self.control.render);
+        var space = self.calcBottomSpace();
+        var padding = self.n_cols - mode.len - space;
         while (padding > 0) : (padding -= 1) try writer.writeAll(" ");
         const curs = try std.fmt.allocPrint(self.allocator, "{d}, {d}", .{ @intCast(i16, self.cursor[1]), @intCast(i16, self.cursor[0]) });
         try writer.writeAll(curs);
@@ -353,7 +428,7 @@ pub const Editor = struct {
                 if (self.cursor[1] > 0) self.cursor[1] -= 1;
             },
             .arr_down => {
-                if (self.cursor[1] < self.rows.items.len) self.cursor[1] += 1;
+                if (self.cursor[1] < self.rows.items.len - 1) self.cursor[1] += 1;
             },
             else => unreachable,
         }

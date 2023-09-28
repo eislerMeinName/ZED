@@ -17,22 +17,25 @@ const stdout = io.getStdOut().writer();
 var gpa = heap.GeneralPurposeAllocator(.{}){};
 
 pub fn main() anyerror!void {
-    //var b: u8 = try readByte();
-    //while (b != 'q') {
-    //    std.debug.print("{c}", .{b});
-    //    b = try readByte();
-    //}
+    var args = std.process.args();
+    _ = args.next();
+
+    var path = args.next() orelse {
+        std.debug.print("Usage: ZED [filename]\n\n", .{});
+        return error.NoFileName;
+    };
+
     var allocator = gpa.allocator();
-    var edit = try Editor.init(allocator);
+    var edit = try Editor.init(allocator, path);
     try edit.enableRawMode();
-    //defer edit.disableRawMode();
+    defer edit.disableRawMode();
 
     while (!edit.shutting_down) {
         try edit.refreshScreen();
         try edit.process();
     }
 
-    //editor.free();
+    //    editor.free();
     try stdout.writeAll("\x1b[2J");
     try stdout.writeAll("\x1b[H");
 }
