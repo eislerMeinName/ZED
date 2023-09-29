@@ -1,26 +1,26 @@
-const Key = @import("key.zig").Key;
+const Key = @import("key").Key;
 const std = @import("std");
-const io = @import("std").io;
+const io = std.io;
 const os = std.os;
 const fs = std.fs;
 const stdin = io.getStdIn().reader();
-const mem = @import("std").mem;
-const heap = @import("std").heap;
-const window = @import("window.zig");
+const mem = std.mem;
+const window = @import("window");
 const WindowSize = window.WindowSize;
 const fmt = std.fmt;
 const termios = os.termios;
-const Row = @import("row.zig").Row;
+const Row = @import("row").Row;
 const ArrayList = std.ArrayList;
 
 const ControlKeys = @import("config").ControlKeys;
 const CK = ControlKeys{};
 
+const Theme = @import("config").Theme{};
+const Color = @import("config").Color{};
+
 const zed_version = "0.1";
 
 pub const EditorState = enum { starting, writing, controlling };
-
-pub const StringArrayList = std.ArrayList([]u8);
 
 const stdout = io.getStdOut().writer();
 const stdin_fd = io.getStdIn().handle;
@@ -38,7 +38,6 @@ pub const Editor = struct {
     col_offset: usize = 0,
     rows: ArrayList(Row),
     cursor: @Vector(2, i16),
-    offset: @Vector(2, i16),
     shutting_down: bool,
     state: EditorState,
     control: Row,
@@ -55,7 +54,6 @@ pub const Editor = struct {
             .n_rows = ws.rows,
             .n_cols = ws.cols,
             .cursor = @Vector(2, i16){ 0, 0 },
-            .offset = @Vector(2, i16){ 0, 0 },
             .rows = ArrayList(Row).init(allocator),
             .shutting_down = false,
             .control = Row{ .src = "", .render = "" },
@@ -67,6 +65,7 @@ pub const Editor = struct {
 
         if (mem.eql(u8, path, "")) {
             edit.state = .starting;
+            try edit.insertRow(0, "");
             return edit;
         }
 
@@ -222,13 +221,14 @@ pub const Editor = struct {
         var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
         var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
 
-        if (self.rows.items.len < f_row or (f_col == 0 and f_row == 0)) return;
+        if (self.rows.items.len <= f_row or (f_col == 0 and f_row == 0)) return;
 
         const row = &self.rows.items[f_row];
 
         if (f_col == 0) {
             f_col = self.rows.items[f_row - 1].src.len;
-            try row.appendString(row.src, self.allocator);
+            const prev_row = &self.rows.items[f_row - 1];
+            try prev_row.appendString(row.src, self.allocator);
             try self.delRow(f_row);
 
             if (self.cursor[1] == 0) self.row_offset -= 1 else self.cursor[1] -= 1;
@@ -291,7 +291,7 @@ pub const Editor = struct {
                 if (self.control.src.len > 0) try self.control.delCharAt(self.control.src.len - 1, self.allocator);
             },
             .enter => {
-                try self.checkCommands();
+                if (self.control.src.len > 1) try self.checkCommands();
             },
             .arr_left, .arr_up, .arr_down, .arr_right => self.moveCursor(input),
             else => {
@@ -349,7 +349,7 @@ pub const Editor = struct {
         } else if (mem.eql(u8, self.control.render, CK.quitKey)) {
             self.shutting_down = true;
         } else if (mem.eql(u8, self.control.render, CK.writeKey)) {
-            try self.save();
+            if (!(mem.eql(u8, self.file_path, ""))) try self.save();
         } else {
             return;
         }
@@ -397,6 +397,7 @@ pub const Editor = struct {
     }
 
     fn drawBottom(self: *Editor, writer: anytype) !void {
+        try writer.writeAll(Theme.bottom);
         var mode = try fmt.allocPrint(self.allocator, "ZED -- mode {s} | {s} | {s}", .{ @tagName(self.state), self.file_path, self.control.render });
         defer self.allocator.free(mode);
         try writer.writeAll(mode);
@@ -405,6 +406,7 @@ pub const Editor = struct {
         while (padding > 0) : (padding -= 1) try writer.writeAll(" ");
         const curs = try std.fmt.allocPrint(self.allocator, "{d}, {d}", .{ @intCast(i16, self.cursor[1]), @intCast(i16, self.cursor[0]) });
         try writer.writeAll(curs);
+        try writer.writeAll(Theme.reset);
     }
 
     fn drawWriting(self: *Editor, writer: anytype) !void {
@@ -454,10 +456,11 @@ pub const Editor = struct {
         }
     }
 
-    fn drawCentral(self: *Editor, writer: anytype, str: []const u8) !void {
-        var lPadding = @divFloor(self.n_cols - str.len, 2);
+    fn drawCentral(self: *Editor, writer: anytype, str: []const u8, len: usize) !void {
+        var lPadding = @divFloor(self.n_cols - len, 2);
         while (lPadding > 0) : (lPadding -= 1) try writer.writeAll(" ");
         try writer.writeAll(str);
+        try writer.writeAll("\x1b[K\r\n");
     }
 
     fn drawStarting(self: *Editor, writer: anytype) !void {
@@ -465,41 +468,27 @@ pub const Editor = struct {
         var floorPadding = self.n_rows - 1 - 5 - topPadding;
         while (topPadding > 0) : (topPadding -= 1) try writer.writeAll("\x1b[K\r\n");
 
-        var version = try fmt.allocPrint(self.allocator, "ZED -- version {s}\r\n", .{zed_version});
+        var version = try fmt.allocPrint(self.allocator, "ZED -- version {s}", .{zed_version});
         defer self.allocator.free(version);
-        try self.drawCentral(writer, version);
+        try self.drawCentral(writer, version, version.len);
 
-        var by = "by Johannes M. Tölle\r\n";
-        try self.drawCentral(writer, by);
+        var by = "by Johannes M. Tölle";
+        var byC = "by " ++ Color.RED ++ "Jo" ++ Color.GREEN ++ "ha" ++ Color.YELLOW ++ "nn" ++ Color.BLUE ++ "es " ++ Color.MAGENTA ++ "M. " ++ Color.CYAN ++ "Tö" ++ Color.RED ++ "lle";
+        try self.drawCentral(writer, byC, by.len);
 
-        try writer.writeAll("\x1b[K\r\n");
-
-        var note = "Note: no file specified\r\n";
-        try self.drawCentral(writer, note);
+        try writer.writeAll(Color.RESET);
 
         try writer.writeAll("\x1b[K\r\n");
 
-        var press = "Press any Key\r\n";
-        try self.drawCentral(writer, press);
+        var note = "Note: no file specified";
+        try self.drawCentral(writer, note, note.len);
+
+        try writer.writeAll("\x1b[K\r\n");
+
+        var press = "Press any Key";
+        try self.drawCentral(writer, press, press.len);
 
         while (floorPadding > 0) : (floorPadding -= 1) try writer.writeAll("\x1b[K\r\n");
-    }
-
-    fn drawStarting2(self: *Editor, writer: anytype) !void {
-        var y: usize = 0;
-        while (y < self.n_rows - 1) : (y += 1) {
-            const row = y + self.row_offset;
-            if (row >= self.rows.items.len and self.rows.items.len == 0 and y == self.n_rows / 3) {
-                var welcome = try fmt.allocPrint(self.allocator, "ZED -- version {s}", .{zed_version});
-                defer self.allocator.free(welcome);
-                if (welcome.len > self.n_cols) welcome = welcome[0..self.n_cols];
-                var padding = (self.n_cols - welcome.len) / 2;
-                while (padding > 0) : (padding -= 1) try writer.writeAll(" ");
-                try writer.writeAll(welcome);
-            }
-            try writer.writeAll("\x1b[K");
-            if (y < self.n_rows - 1) try writer.writeAll("\r\n");
-        }
     }
 
     pub fn refreshScreen(self: *Editor) !void {
@@ -509,26 +498,75 @@ pub const Editor = struct {
         try writer.writeAll("\x1b[?25l");
         try writer.writeAll("\x1b[H");
         try self.drawRows(writer);
-        try writer.print("\x1b[{d};{d}H", .{ (self.cursor[1] - @intCast(i16, self.row_offset)) + 1, self.cursor[0] + 1 });
+        try writer.print("\x1b[{d};{d}H", .{ (self.cursor[1] - @intCast(i16, self.row_offset)) + 1, self.cursor[0] + @intCast(i16, self.col_offset) + 1 });
         try writer.writeAll("\x1b[?25h");
         try stdout.writeAll(buf.items);
     }
 
-    fn moveCursor(self: *Editor, movement: u8) void {
-        switch (@intToEnum(Key, movement)) {
+    fn moveCursor(self: *Editor, move: u8) void {
+        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+
+        switch (@intToEnum(Key, move)) {
             .arr_left => {
-                if (self.cursor[0] > 0) self.cursor[0] -= 1;
+                if (self.cursor[0] == 0) {
+                    if (self.col_offset > 0) {
+                        self.col_offset -= 1;
+                    } else {
+                        if (f_row > 0) {
+                            self.cursor[1] -= 1;
+                            self.cursor[0] = @intCast(i16, self.rows.items[f_row - 1].src.len);
+                            if (@intCast(usize, self.cursor[0]) > self.n_cols - 1) {
+                                self.col_offset = @intCast(usize, self.cursor[0]) - self.n_cols + 1;
+                                self.cursor[0] = @intCast(i16, self.n_cols - 1);
+                            }
+                        }
+                    }
+                } else {
+                    self.cursor[0] -= 1;
+                }
             },
             .arr_right => {
-                if (self.cursor[0] < self.n_cols - 1) self.cursor[0] += 1;
+                if (f_row < self.rows.items.len) {
+                    var row = self.rows.items[f_row];
+
+                    if (f_col < row.src.len) {
+                        if (self.cursor[0] == self.n_cols - 1) self.col_offset += 1 else self.cursor[0] += 1;
+                    } else if (f_col == row.src.len and f_row + 1 < self.rows.items.len) {
+                        self.cursor[0] = 0;
+                        self.col_offset = 0;
+
+                        if (self.cursor[1] == self.n_rows - 1) self.row_offset += 1 else self.cursor[1] += 1;
+                    }
+                }
             },
             .arr_up => {
-                if (self.cursor[1] > 0) self.cursor[1] -= 1;
+                if (self.cursor[1] == 0) {
+                    if (self.row_offset > 0) self.row_offset -= 1;
+                } else {
+                    self.cursor[1] -= 1;
+                }
             },
             .arr_down => {
-                if (self.cursor[1] < self.rows.items.len - 1) self.cursor[1] += 1;
+                if (f_row + 1 < self.rows.items.len) {
+                    if (self.cursor[1] == self.n_rows - 1) self.row_offset += 1 else self.cursor[1] += 1;
+                }
             },
             else => unreachable,
+        }
+
+        f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+
+        var length: usize = if (f_row >= self.rows.items.len) 0 else self.rows.items[f_row].src.len;
+
+        if (f_col > length) {
+            self.cursor[0] -= @intCast(i16, f_col - length);
+
+            if (self.cursor[0] < 0) {
+                self.col_offset += @intCast(usize, self.cursor[0]);
+                self.cursor[0] = 0;
+            }
         }
     }
 
@@ -590,9 +628,5 @@ pub const Editor = struct {
         var buffer: [1]u8 = undefined;
         _ = try stdin.read(buffer[0..]);
         return buffer[0];
-    }
-
-    inline fn ctrlKey(comptime ch: u8) u8 {
-        return ch & 0x1f;
     }
 };

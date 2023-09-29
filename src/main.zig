@@ -1,17 +1,10 @@
 const std = @import("std");
-const ascii = @import("std").ascii;
-const fmt = @import("std").fmt;
-const io = @import("std").io;
-const heap = @import("std").heap;
-const mem = @import("std").mem;
-const Movement = @import("key.zig").Movement;
-const Key = @import("key.zig").Key;
+const heap = std.heap;
+const Key = @import("key").Key;
 const Editor = @import("editor.zig").Editor;
 const EditorState = @import("editor.zig").EditorState;
-usingnamespace @import("std").os;
+const io = std.io;
 
-const stdin_fd = io.getStdIn().handle;
-const stdin = io.getStdIn().reader();
 const stdout = io.getStdOut().writer();
 
 var gpa = heap.GeneralPurposeAllocator(.{}){};
@@ -19,11 +12,6 @@ var gpa = heap.GeneralPurposeAllocator(.{}){};
 pub fn main() anyerror!void {
     var args = std.process.args();
     _ = args.next();
-
-    //var path = args.next() orelse {
-    //    std.debug.print("Usage: ZED [filename]\n\n", .{});
-    //    return error.NoFileName;
-    //};
 
     var path = args.next() orelse "";
 

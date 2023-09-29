@@ -13,6 +13,9 @@ pub fn build(b: *std.build.Builder) void {
 
     const exe = b.addExecutable("ZED", "src/main.zig");
     exe.addPackagePath("config", "config.zig");
+    exe.addPackagePath("key", "src/key.zig");
+    exe.addPackagePath("window", "src/window.zig");
+    exe.addPackagePath("row", "src/row.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.install();
