@@ -1,5 +1,4 @@
 const Key = @import("key.zig").Key;
-const Movement = @import("key.zig").Movement;
 const std = @import("std");
 const io = @import("std").io;
 const os = std.os;
@@ -13,6 +12,9 @@ const fmt = std.fmt;
 const termios = os.termios;
 const Row = @import("row.zig").Row;
 const ArrayList = std.ArrayList;
+
+const ControlKeys = @import("config.zig").ControlKeys;
+const CK = ControlKeys{};
 
 const zed_version = "0.1";
 
@@ -324,8 +326,10 @@ pub const Editor = struct {
     }
 
     fn checkQuickCommands(self: *Editor) !void {
-        if (mem.eql(u8, self.control.render, "dd")) {
+        if (mem.eql(u8, self.control.render, CK.quickDeleteLineKey)) {
             try self.QuickdeleteLine();
+        } else if (self.control.render[0] == CK.quickMoveWriting) {
+            self.state = .writing;
         } else {
             return;
         }
@@ -333,11 +337,16 @@ pub const Editor = struct {
     }
 
     fn checkCommands(self: *Editor) !void {
-        if (mem.eql(u8, self.control.render, ":x")) {
+        if (mem.eql(u8, self.control.render, CK.writeQuitKey)) {
             try self.writeQuit();
-        } else if (mem.eql(u8, self.control.render[0..2], ":f")) {
+        } else if (mem.eql(u8, self.control.render[0..2], CK.pathKey)) {
             try self.setFilePath();
-        } else if (mem.eql(u8, self.control.render, ":q")) {
+        } else if (mem.eql(u8, self.control.render[0..2], CK.fileKey)) {
+            const len = self.control.render.len - 3;
+            var buffer = try self.allocator.alloc(u8, len);
+            mem.copy(u8, buffer[0..len], self.control.render[3..self.control.render.len]);
+            try self.open(buffer);
+        } else if (mem.eql(u8, self.control.render, CK.quitKey)) {
             self.shutting_down = true;
         } else {
             return;
