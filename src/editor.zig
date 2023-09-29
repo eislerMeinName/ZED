@@ -13,7 +13,7 @@ const termios = os.termios;
 const Row = @import("row.zig").Row;
 const ArrayList = std.ArrayList;
 
-const ControlKeys = @import("config.zig").ControlKeys;
+const ControlKeys = @import("config").ControlKeys;
 const CK = ControlKeys{};
 
 const zed_version = "0.1";
@@ -348,6 +348,8 @@ pub const Editor = struct {
             try self.open(buffer);
         } else if (mem.eql(u8, self.control.render, CK.quitKey)) {
             self.shutting_down = true;
+        } else if (mem.eql(u8, self.control.render, CK.writeKey)) {
+            try self.save();
         } else {
             return;
         }
