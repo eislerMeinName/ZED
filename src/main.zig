@@ -16,9 +16,11 @@ pub fn main() anyerror!void {
     var path = args.next() orelse "";
 
     var allocator = gpa.allocator();
+    // defer _ = gpa.deinit();
+
     var edit = try Editor.init(allocator, path);
     try edit.enableRawMode();
-    defer edit.disableRawMode();
+    defer edit.deinit();
 
     while (!edit.shutting_down) {
         try edit.updateWindowSize();
@@ -26,7 +28,6 @@ pub fn main() anyerror!void {
         try edit.process();
     }
 
-    //    editor.free();
     try stdout.writeAll("\x1b[2J");
     try stdout.writeAll("\x1b[H");
 }

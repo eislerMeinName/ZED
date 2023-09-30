@@ -4,12 +4,15 @@ const std = @import("std");
 pub const Row = struct {
     src: []u8,
     render: []u8,
+    offset: i16 = 0,
 
     pub fn appendString(self: *Row, str: []const u8, alloc: mem.Allocator) !void {
         var len = self.src.len;
         var str_len = str.len;
-        self.src = try alloc.realloc(self.src[0..len], len + str_len);
+
         //_ = alloc.resize(self.src[0..len], len + str_len);
+        self.src = try alloc.realloc(self.src[0..len], len + str_len);
+        // _ = alloc.resize(self.src[0..len], len + str_len);
 
         mem.copy(u8, self.src[len .. len + str_len], str);
         try self.updateRow(alloc);
@@ -32,7 +35,7 @@ pub const Row = struct {
         self.src = try alloc.realloc(self.src, old_src.len + 1);
 
         if (at > self.src.len) {
-            //            @memset(self.src[at..at + 1], char);
+            @memset(self.src[at .. at + 1], char);
         } else {
             var j: usize = 0;
             var i: usize = 0;
@@ -53,8 +56,9 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
     var ro = Row{ .src = "", .render = "" };
-    try ro.appendString(":x", allocator);
-    std.debug.print("{s}\n", .{ro.render});
-    try ro.delCharAt(0, allocator);
-    std.debug.print("{s}, {s}", .{ ro.render, ro.src });
+    try ro.appendString(":", allocator);
+    try ro.appendString("q", allocator);
+    std.debug.print("{s}\n{d}", .{ ro.render, ro.render.len });
+    //try ro.delCharAt(0, allocator);
+    //std.debug.print("{s}, {s}", .{ ro.render, ro.src });
 }

@@ -15,7 +15,7 @@ const WindowSize = struct {
 pub fn getWindowSize() !WindowSize {
     var ws: linux.winsize = undefined;
     //const fd = @as(usize, @bitCast(@as(isize, linux.STDOUT_FILENO)));
-    switch (errno(system.ioctl(stdin_fd, linux.T.IOCGWINSZ, @ptrToInt(&ws)))) {
+    switch (errno(system.ioctl(stdin_fd, linux.T.IOCGWINSZ, @intFromPtr(&ws)))) {
         .SUCCESS => return WindowSize{ .rows = ws.ws_row, .cols = ws.ws_col },
         //EBADF => return error.BadFileDescriptor,
         //EINVAL => return error.InvalidRequest,

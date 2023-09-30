@@ -1,22 +1,22 @@
-const Key = @import("key").Key;
+const Key = @import("key.zig").Key;
 const std = @import("std");
 const io = std.io;
 const os = std.os;
 const fs = std.fs;
 const stdin = io.getStdIn().reader();
 const mem = std.mem;
-const window = @import("window");
+const window = @import("window.zig");
 const WindowSize = window.WindowSize;
 const fmt = std.fmt;
 const termios = os.termios;
-const Row = @import("row").Row;
+const Row = @import("row.zig").Row;
 const ArrayList = std.ArrayList;
 
-const ControlKeys = @import("config").ControlKeys;
+const ControlKeys = @import("config.zig").ControlKeys;
 const CK = ControlKeys{};
 
-const Theme = @import("config").Theme{};
-const Color = @import("config").Color{};
+const Theme = @import("config.zig").Theme{};
+const Color = @import("config.zig").Color{};
 
 const zed_version = "0.1";
 
@@ -38,6 +38,7 @@ pub const Editor = struct {
     col_offset: usize = 0,
     rows: ArrayList(Row),
     cursor: @Vector(2, i16),
+    cursor_offset: i16 = 0,
     shutting_down: bool,
     state: EditorState,
     control: Row,
@@ -83,11 +84,21 @@ pub const Editor = struct {
         raw.lflag &= ~(os.linux.ECHO | os.linux.ICANON | os.linux.IEXTEN | os.linux.ISIG);
         raw.cc[4] = 0;
         raw.cc[6] = 1;
-        try os.tcsetattr(stdin_fd, os.linux.TCSA.FLUSH, raw);
+        _ = os.linux.tcsetattr(stdin_fd, os.linux.TCSA.FLUSH, &raw);
     }
 
-    pub fn disableRawMode(self: *Self) void {
-        os.tcsetattr(stdin_fd, os.TCSA.FLUSH, self.orig_termios) catch edit_panic("tcsetattr", null);
+    fn disableRawMode(self: *Self) !void {
+        _ = os.linux.tcsetattr(stdin_fd, os.TCSA.FLUSH, &self.orig_termios);
+    }
+
+    pub fn deinit(self: *Editor) void {
+        self.disableRawMode() catch unreachable;
+        for (self.rows.items) |row| {
+            self.allocator.free(row.src);
+            self.allocator.free(row.render);
+        }
+        self.allocator.free(self.control.src);
+        self.allocator.free(self.control.render);
     }
 
     pub fn updateWindowSize(self: *Editor) !void {
@@ -153,8 +164,8 @@ pub const Editor = struct {
     }
 
     fn insertNewLine(self: *Editor) !void {
-        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
-        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+        var f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
+        var f_col = self.col_offset + @as(usize, @intCast(self.cursor[0]));
 
         if (f_row >= self.rows.items.len) {
             if (f_row == self.rows.items.len) {
@@ -218,8 +229,8 @@ pub const Editor = struct {
     }
 
     fn delChar(self: *Editor) !void {
-        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
-        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+        var f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
+        var f_col = self.col_offset + @as(usize, @intCast(self.cursor[0]));
 
         if (self.rows.items.len <= f_row or (f_col == 0 and f_row == 0)) return;
 
@@ -232,11 +243,11 @@ pub const Editor = struct {
             try self.delRow(f_row);
 
             if (self.cursor[1] == 0) self.row_offset -= 1 else self.cursor[1] -= 1;
-            self.cursor[0] = @intCast(i16, f_col);
+            self.cursor[0] = @as(i16, @intCast(f_col));
 
             if (self.cursor[0] >= self.n_cols) {
-                var shift: usize = self.n_cols - @intCast(usize, self.cursor[0]) + 1;
-                self.cursor[0] -= @intCast(i16, shift);
+                var shift: usize = self.n_cols - @as(usize, @intCast(self.cursor[0])) + 1;
+                self.cursor[0] -= @as(i16, @intCast(shift));
                 self.col_offset += shift;
             }
         } else {
@@ -252,8 +263,8 @@ pub const Editor = struct {
     }
 
     fn insertChar(self: *Editor, char: u8) !void {
-        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
-        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+        var f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
+        var f_col = self.col_offset + @as(usize, @intCast(self.cursor[0]));
 
         var i = self.rows.items.len;
 
@@ -265,13 +276,17 @@ pub const Editor = struct {
 
         const row = &self.rows.items[f_row];
 
+        if (char == 195) {
+            row.offset -= 1;
+        }
+
         try row.insertCharAt(f_col, self.allocator, char);
 
         if (self.cursor[0] == self.n_cols - 1) self.col_offset += 1 else self.cursor[0] += 1;
     }
 
     fn processWriting(self: *Editor, input: u8) !void {
-        switch (@intToEnum(Key, input)) {
+        switch (@as(Key, @enumFromInt(input))) {
             .enter => return try self.insertNewLine(),
             .arr_left, .arr_up, .arr_down, .arr_right => self.moveCursor(input),
             .esc => self.state = .controlling,
@@ -282,7 +297,7 @@ pub const Editor = struct {
     }
 
     fn processControlling(self: *Editor, input: u8) !void {
-        switch (@intToEnum(Key, input)) {
+        switch (@as(Key, @enumFromInt(input))) {
             .esc => {
                 self.state = .writing;
                 try self.emptyControl();
@@ -317,7 +332,7 @@ pub const Editor = struct {
 
     fn QuickdeleteLine(self: *Editor) !void {
         if (self.rows.items.len == 0) return;
-        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
+        var f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
         try self.delRow(f_row);
         if (f_row >= self.rows.items.len and f_row > 0) {
             self.cursor[1] -= 1;
@@ -351,6 +366,7 @@ pub const Editor = struct {
         } else if (mem.eql(u8, self.control.render, CK.writeKey)) {
             if (!(mem.eql(u8, self.file_path, ""))) try self.save();
         } else {
+            std.debug.print("{d} {s}", .{ self.control.render.len, self.control.render });
             return;
         }
         try self.emptyControl();
@@ -404,7 +420,7 @@ pub const Editor = struct {
         var space = self.calcBottomSpace();
         var padding = self.n_cols - mode.len - space;
         while (padding > 0) : (padding -= 1) try writer.writeAll(" ");
-        const curs = try std.fmt.allocPrint(self.allocator, "{d}, {d}", .{ @intCast(i16, self.cursor[1]), @intCast(i16, self.cursor[0]) });
+        const curs = try std.fmt.allocPrint(self.allocator, "{d}, {d}", .{ @as(i16, @intCast(self.cursor[1])), @as(i16, @intCast(self.cursor[0])) });
         try writer.writeAll(curs);
         try writer.writeAll(Theme.reset);
     }
@@ -498,16 +514,20 @@ pub const Editor = struct {
         try writer.writeAll("\x1b[?25l");
         try writer.writeAll("\x1b[H");
         try self.drawRows(writer);
-        try writer.print("\x1b[{d};{d}H", .{ (self.cursor[1] - @intCast(i16, self.row_offset)) + 1, self.cursor[0] + @intCast(i16, self.col_offset) + 1 });
+
+        const f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
+        const row = self.rows.items[f_row];
+        const off = row.offset;
+        try writer.print("\x1b[{d};{d}H", .{ (self.cursor[1] - @as(i16, @intCast(self.row_offset))) + 1 + off, self.cursor[0] + @as(i16, @intCast(self.col_offset)) + 1 + off });
         try writer.writeAll("\x1b[?25h");
         try stdout.writeAll(buf.items);
     }
 
     fn moveCursor(self: *Editor, move: u8) void {
-        var f_row = self.row_offset + @intCast(usize, self.cursor[1]);
-        var f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+        var f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
+        var f_col = self.col_offset + @as(usize, @intCast(self.cursor[0]));
 
-        switch (@intToEnum(Key, move)) {
+        switch (@as(Key, @enumFromInt(move))) {
             .arr_left => {
                 if (self.cursor[0] == 0) {
                     if (self.col_offset > 0) {
@@ -515,10 +535,10 @@ pub const Editor = struct {
                     } else {
                         if (f_row > 0) {
                             self.cursor[1] -= 1;
-                            self.cursor[0] = @intCast(i16, self.rows.items[f_row - 1].src.len);
-                            if (@intCast(usize, self.cursor[0]) > self.n_cols - 1) {
-                                self.col_offset = @intCast(usize, self.cursor[0]) - self.n_cols + 1;
-                                self.cursor[0] = @intCast(i16, self.n_cols - 1);
+                            self.cursor[0] = @as(i16, @intCast(self.rows.items[f_row - 1].src.len));
+                            if (@as(usize, @intCast(self.cursor[0])) > self.n_cols - 1) {
+                                self.col_offset = @as(usize, @intCast(self.cursor[0])) - self.n_cols + 1;
+                                self.cursor[0] = @as(i16, @intCast(self.n_cols - 1));
                             }
                         }
                     }
@@ -555,16 +575,16 @@ pub const Editor = struct {
             else => unreachable,
         }
 
-        f_row = self.row_offset + @intCast(usize, self.cursor[1]);
-        f_col = self.col_offset + @intCast(usize, self.cursor[0]);
+        f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
+        f_col = self.col_offset + @as(usize, @intCast(self.cursor[0]));
 
         var length: usize = if (f_row >= self.rows.items.len) 0 else self.rows.items[f_row].src.len;
 
         if (f_col > length) {
-            self.cursor[0] -= @intCast(i16, f_col - length);
+            self.cursor[0] -= @as(i16, @intCast(f_col - length));
 
             if (self.cursor[0] < 0) {
-                self.col_offset += @intCast(usize, self.cursor[0]);
+                self.col_offset += @as(usize, @intCast(self.cursor[0]));
                 self.cursor[0] = 0;
             }
         }
@@ -573,34 +593,34 @@ pub const Editor = struct {
     fn readKey(self: *Editor) !u8 {
         if (self.state == .starting) {
             _ = try readByte();
-            return @enumToInt(Key.arr_up);
+            return @intFromEnum(Key.arr_up);
         }
         const byte = try readByte();
         switch (byte) {
-            @enumToInt(Key.esc) => {
-                const byte2 = readByte() catch return @enumToInt(Key.esc);
+            @intFromEnum(Key.esc) => {
+                const byte2 = readByte() catch return @intFromEnum(Key.esc);
 
                 if (byte2 == '[') {
-                    const byte3 = readByte() catch return @enumToInt(Key.esc);
+                    const byte3 = readByte() catch return @intFromEnum(Key.esc);
                     switch (byte3) {
-                        'A' => return @enumToInt(Key.arr_up),
-                        'B' => return @enumToInt(Key.arr_down),
-                        'C' => return @enumToInt(Key.arr_right),
-                        'D' => return @enumToInt(Key.arr_left),
-                        'H' => return @enumToInt(Key.home),
-                        'F' => return @enumToInt(Key.end),
+                        'A' => return @intFromEnum(Key.arr_up),
+                        'B' => return @intFromEnum(Key.arr_down),
+                        'C' => return @intFromEnum(Key.arr_right),
+                        'D' => return @intFromEnum(Key.arr_left),
+                        'H' => return @intFromEnum(Key.home),
+                        'F' => return @intFromEnum(Key.end),
                         '0'...'9' => {
-                            const byte4 = readByte() catch return @enumToInt(Key.esc);
+                            const byte4 = readByte() catch return @intFromEnum(Key.esc);
                             if (byte4 == '~') {
                                 switch (byte3) {
-                                    '1' => return @enumToInt(Key.home),
-                                    '2' => return @enumToInt(Key.del),
-                                    '3' => return @enumToInt(Key.end),
+                                    '1' => return @intFromEnum(Key.home),
+                                    '2' => return @intFromEnum(Key.del),
+                                    '3' => return @intFromEnum(Key.end),
                                     //'4' => return @enumToInt(Key.page_up),
                                     //'5' => return @enumToInt(Key.page_down),
                                     //'6' => return @enumToInt(Key.page_down),
-                                    '7' => return @enumToInt(Key.home),
-                                    '8' => return @enumToInt(Key.end),
+                                    '7' => return @intFromEnum(Key.home),
+                                    '8' => return @intFromEnum(Key.end),
                                     else => {},
                                 }
                             }
@@ -608,15 +628,15 @@ pub const Editor = struct {
                         else => {},
                     }
                 } else if (byte2 == 'O') {
-                    const byte5 = readByte() catch return @enumToInt(Key.esc);
+                    const byte5 = readByte() catch return @intFromEnum(Key.esc);
                     switch (byte5) {
-                        'H' => return @enumToInt(Key.home),
-                        'F' => return @enumToInt(Key.end),
+                        'H' => return @intFromEnum(Key.home),
+                        'F' => return @intFromEnum(Key.end),
                         else => {},
                     }
                 }
 
-                return @enumToInt(Key.esc);
+                return @intFromEnum(Key.esc);
             },
             else => return byte,
         }
