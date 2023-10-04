@@ -15,9 +15,9 @@ $ sudo ln -s /path/to/your/program/ZED zed
 ```
 
 > ## TODOs
-> - Fix Error with Tab and Ä,Ü,Ö,
 > - Fix Error with InsertingLine
 > - Fix Error with not correctly showing the screen in long lines, many rows, wrong curser
 > - Implement more Commands
-> - Implement Highlighting for different file type
+> - Implement more Highlighting (for different file types)
+
 

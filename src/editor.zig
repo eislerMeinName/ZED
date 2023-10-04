@@ -276,10 +276,6 @@ pub const Editor = struct {
 
         const row = &self.rows.items[f_row];
 
-        if (char == 195) {
-            row.offset -= 1;
-        }
-
         try row.insertCharAt(f_col, self.allocator, char);
 
         if (self.cursor[0] == self.n_cols - 1) self.col_offset += 1 else self.cursor[0] += 1;
@@ -443,6 +439,7 @@ pub const Editor = struct {
     }
 
     fn drawControl(self: *Editor, writer: anytype) !void {
+        try writer.writeAll(Color.GREY);
         var y: usize = 0;
         while (y < self.n_rows - 1) : (y += 1) {
             const file_row = y + self.row_offset;
@@ -463,13 +460,14 @@ pub const Editor = struct {
                 }
             } else {
                 var row = &self.rows.items[file_row];
-                var len = row.render.len;
+                var len = row.src.len;
                 if (len > self.n_cols) len = self.n_cols;
-                try writer.writeAll(row.render[0..len]);
+                try writer.writeAll(row.src[0..len]);
             }
             try writer.writeAll("\x1b[K");
             if (y < self.n_rows - 1) try writer.writeAll("\r\n");
         }
+        try writer.writeAll(Color.RESET);
     }
 
     fn drawCentral(self: *Editor, writer: anytype, str: []const u8, len: usize) !void {
@@ -516,9 +514,9 @@ pub const Editor = struct {
         try self.drawRows(writer);
 
         const f_row = self.row_offset + @as(usize, @intCast(self.cursor[1]));
-        const row = self.rows.items[f_row];
-        const off = row.offset;
-        try writer.print("\x1b[{d};{d}H", .{ (self.cursor[1] - @as(i16, @intCast(self.row_offset))) + 1 + off, self.cursor[0] + @as(i16, @intCast(self.col_offset)) + 1 + off });
+        const row = &self.rows.items[f_row];
+        const off = row.calcOffset(@as(usize, @intCast(self.cursor[0])) + self.col_offset);
+        try writer.print("\x1b[{d};{d}H", .{ (self.cursor[1] - @as(i16, @intCast(self.row_offset))) + 1, self.cursor[0] + @as(i16, @intCast(self.col_offset)) + 1 + off });
         try writer.writeAll("\x1b[?25h");
         try stdout.writeAll(buf.items);
     }
