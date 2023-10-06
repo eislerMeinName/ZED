@@ -15,9 +15,8 @@ $ sudo ln -s /path/to/your/program/ZED zed
 ```
 
 > ## TODOs
-> - Fix Error with InsertingLine
-> - Fix Error with not correctly showing the screen in long lines, many rows, wrong curser
+> - Fix Segfault Error (Inserting Line at Line 8, delting char, inserting char sometimes)
+> - Implement Long Lines
 > - Implement more Commands
-> - Implement more Highlighting (for different file types)
-
+> - Implement Highlighting for different file types
 

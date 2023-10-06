@@ -29,9 +29,15 @@ pub const ControlKeys = struct {
 pub const COL = Color{};
 
 pub const Theme = struct {
+    word: []const u8 = COL.BLUE,
+    word2: []const u8 = COL.B_BLUE,
+    comment: []const u8 = COL.GREY,
+    number: []const u8 = COL.CYAN,
     bottom: []const u8 = COL.YELLOW,
     reset: []const u8 = COL.RESET,
 };
+
+pub const THEME = Theme{};
 
 pub const HighlightEnum = enum(u8) {
     number = 31,
@@ -47,64 +53,118 @@ pub const Highlight = struct {
     col: []const u8,
 };
 
-pub const KEYWORDS: [10]Highlight = [10]Highlight{
+pub const KEYWORDS = [_]Highlight{
     Highlight{
         .HL = .comment,
         .str = "//",
-        .col = COL.GREY,
+        .col = THEME.comment,
     },
 
     Highlight{
         .HL = .number,
         .str = "1",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "2",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "3",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "4",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "5",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "6",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "7",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "8",
-        .col = COL.CYAN,
+        .col = THEME.number,
     },
 
     Highlight{
         .HL = .number,
         .str = "9",
-        .col = COL.CYAN,
+        .col = THEME.number,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "const",
+        .col = THEME.word,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "fun",
+        .col = THEME.word2,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "fn",
+        .col = THEME.word2,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "pub",
+        .col = THEME.word,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "public",
+        .col = THEME.word,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "private",
+        .col = THEME.word,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "var",
+        .col = THEME.word,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "struct",
+        .col = THEME.word2,
+    },
+
+    Highlight{
+        .HL = .other,
+        .str = "enum",
+        .col = THEME.word2,
     },
 };

@@ -153,7 +153,7 @@ pub const Row = struct {
                 const index2 = &indicees.items[j];
                 if (index2.at == i) {
                     switch (index2.high.HL) {
-                        .number => {
+                        .number, .other => {
                             const endlen = index2.at + off + index2.high.col.len + index2.high.str.len;
                             //std.debug.print("at: {d}\n", .{index2.at});
                             try self.insertColor(index2.high.col, index2.at + off, endlen, alloc);
