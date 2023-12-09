@@ -15,8 +15,9 @@ $ sudo ln -s /path/to/your/program/ZED zed
 ```
 
 > ## TODOs
-> - Fix Segfault Error (Inserting Line at Line 8, delting char, inserting char sometimes)
+> - Fix Backspace Bug
 > - Implement Long Lines
 > - Implement more Commands
 > - Implement Highlighting for different file types
+
 

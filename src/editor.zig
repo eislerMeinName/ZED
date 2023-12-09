@@ -184,15 +184,17 @@ pub const Editor = struct {
         } else {
             try self.insertRow(f_row + 1, row.src[f_col..row.src.len]);
 
-            var j: usize = 0;
+            //var j: usize = 0;
 
-            for (row.src[0..f_col]) |c| {
-                row.src[j] = c;
-                j += 1;
-            }
+            //for (row.src[0..f_col]) |c| {
+            //    row.src[j] = c;
+            //    j += 1;
+            //}
 
-            _ = self.allocator.resize(row.src, f_col);
+            //_ = self.allocator.resize(row.src, f_col);
 
+            row.src = try self.allocator.realloc(row.src, f_col);
+            //mem.copy(u8, row.src[0.. f_col], str);
             row.*.src.len = f_col;
 
             try row.updateRow(self.allocator);
