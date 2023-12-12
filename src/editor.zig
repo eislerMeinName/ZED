@@ -126,6 +126,9 @@ pub const Editor = struct {
         while (lines.next()) |line| {
             try self.insertRow(linenumber, line);
             linenumber += 1;
+            if (lines.index.? == lines.buffer.len) {
+                return;
+            }
         }
     }
 

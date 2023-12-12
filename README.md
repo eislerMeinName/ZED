@@ -19,5 +19,7 @@ $ sudo ln -s /path/to/your/program/ZED zed
 > - Implement Long Lines
 > - Implement more Commands
 > - Implement Highlighting for different file types
-
+> - Clear Command Line at end 
+> - Get/Check mouse input
+> - Drag/ Dropping files
 

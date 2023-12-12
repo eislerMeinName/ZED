@@ -30,4 +30,5 @@ pub fn main() anyerror!void {
 
     try stdout.writeAll("\x1b[2J");
     try stdout.writeAll("\x1b[H");
+    try stdout.writeAll("\x1B[2J\x1B[H");
 }
